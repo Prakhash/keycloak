@@ -6,6 +6,7 @@ import org.jboss.resteasy.spi.HttpRequest;
 import org.keycloak.ClientConnection;
 import org.keycloak.RSATokenVerifier;
 import org.keycloak.VerificationException;
+import org.keycloak.broker.provider.IdentityProvider;
 import org.keycloak.events.Details;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.events.EventType;
@@ -20,16 +21,19 @@ import org.keycloak.models.RequiredCredentialModel;
 import org.keycloak.models.RoleModel;
 import org.keycloak.models.UserCredentialModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.models.UserModel.RequiredAction;
 import org.keycloak.models.UserSessionModel;
 import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.protocol.LoginProtocol;
 import org.keycloak.protocol.oidc.TokenManager;
 import org.keycloak.representations.AccessToken;
 import org.keycloak.representations.idm.CredentialRepresentation;
+import org.keycloak.services.resources.IdentityBrokerService;
 import org.keycloak.services.resources.LoginActionsService;
 import org.keycloak.services.resources.RealmsResource;
 import org.keycloak.services.resources.flows.Flows;
 import org.keycloak.services.util.CookieHelper;
+import org.keycloak.services.validation.Validation;
 import org.keycloak.util.Time;
 
 import javax.ws.rs.core.Cookie;
@@ -43,6 +47,7 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
+import java.util.Iterator;
 
 /**
  * Stateless object that manages authentication
@@ -79,7 +84,7 @@ public class AuthenticationManager {
         return userSession != null && userSession.getLastSessionRefresh() + realm.getSsoSessionIdleTimeout() > currentTime && max > currentTime;
     }
 
-    public static void logout(KeycloakSession session, RealmModel realm, UserSessionModel userSession, UriInfo uriInfo, ClientConnection connection) {
+    public static void logout(KeycloakSession session, RealmModel realm, UserSessionModel userSession, UriInfo uriInfo, ClientConnection connection, HttpHeaders headers) {
         if (userSession == null) return;
         UserModel user = userSession.getUser();
         userSession.setState(UserSessionModel.State.LOGGING_OUT);
@@ -95,6 +100,7 @@ public class AuthenticationManager {
                 if (authMethod == null) continue; // must be a keycloak service like account
                 LoginProtocol protocol = session.getProvider(LoginProtocol.class, authMethod);
                 protocol.setRealm(realm)
+                        .setHttpHeaders(headers)
                         .setUriInfo(uriInfo);
                 protocol.backchannelLogout(userSession, clientSession);
                 clientSession.setAction(ClientSessionModel.Action.LOGGED_OUT);
@@ -105,7 +111,7 @@ public class AuthenticationManager {
     }
 
 
-    public static Response browserLogout(KeycloakSession session, RealmModel realm, UserSessionModel userSession, UriInfo uriInfo, ClientConnection connection) {
+    public static Response browserLogout(KeycloakSession session, RealmModel realm, UserSessionModel userSession, UriInfo uriInfo, ClientConnection connection, HttpHeaders headers) {
         if (userSession == null) return null;
         UserModel user = userSession.getUser();
 
@@ -128,6 +134,7 @@ public class AuthenticationManager {
                 if (authMethod == null) continue; // must be a keycloak service like account
                 LoginProtocol protocol = session.getProvider(LoginProtocol.class, authMethod);
                 protocol.setRealm(realm)
+                        .setHttpHeaders(headers)
                         .setUriInfo(uriInfo);
                 try {
                     logger.debugv("backchannel logout to: {0}", client.getClientId());
@@ -139,13 +146,11 @@ public class AuthenticationManager {
             }
         }
 
-        if (redirectClients.size() == 0) {
-            return finishBrowserLogout(session, realm, userSession, uriInfo, connection);
-        }
         for (ClientSessionModel nextRedirectClient : redirectClients) {
             String authMethod = nextRedirectClient.getAuthMethod();
             LoginProtocol protocol = session.getProvider(LoginProtocol.class, authMethod);
             protocol.setRealm(realm)
+                    .setHttpHeaders(headers)
                     .setUriInfo(uriInfo);
             // setting this to logged out cuz I"m not sure protocols can always verify that the client was logged out or not
             nextRedirectClient.setAction(ClientSessionModel.Action.LOGGED_OUT);
@@ -161,17 +166,26 @@ public class AuthenticationManager {
             }
 
         }
-        return finishBrowserLogout(session, realm, userSession, uriInfo, connection);
+        String brokerId = userSession.getNote(IdentityBrokerService.BROKER_PROVIDER_ID);
+        if (brokerId != null) {
+            IdentityProvider identityProvider = IdentityBrokerService.getIdentityProvider(session, realm, brokerId);
+            Response response = identityProvider.keycloakInitiatedBrowserLogout(userSession, uriInfo, realm);
+            if (response != null) return response;
+        }
+        return finishBrowserLogout(session, realm, userSession, uriInfo, connection, headers);
     }
 
-    protected static Response finishBrowserLogout(KeycloakSession session, RealmModel realm, UserSessionModel userSession, UriInfo uriInfo, ClientConnection connection) {
+    public static Response finishBrowserLogout(KeycloakSession session, RealmModel realm, UserSessionModel userSession, UriInfo uriInfo, ClientConnection connection, HttpHeaders headers) {
         expireIdentityCookie(realm, uriInfo, connection);
         expireRememberMeCookie(realm, uriInfo, connection);
         userSession.setState(UserSessionModel.State.LOGGED_OUT);
         String method = userSession.getNote(KEYCLOAK_LOGOUT_PROTOCOL);
+        EventBuilder event = new EventsManager(realm, session, connection).createEventBuilder();
         LoginProtocol protocol = session.getProvider(LoginProtocol.class, method);
         protocol.setRealm(realm)
-                .setUriInfo(uriInfo);
+                .setHttpHeaders(headers)
+                .setUriInfo(uriInfo)
+                .setEventBuilder(event);
         Response response = protocol.finishLogout(userSession);
         session.sessions().removeUserSession(realm, userSession);
         return response;
@@ -285,7 +299,7 @@ public class AuthenticationManager {
         }
 
         String tokenString = cookie.getValue();
-        AuthResult authResult = verifyIdentityToken(session, realm, uriInfo, connection, checkActive, tokenString);
+        AuthResult authResult = verifyIdentityToken(session, realm, uriInfo, connection, checkActive, tokenString, headers);
         if (authResult == null) {
             expireIdentityCookie(realm, uriInfo, connection);
             return null;
@@ -335,6 +349,7 @@ public class AuthenticationManager {
         if (userSession.isRememberMe()) createRememberMeCookie(realm, userSession.getUser().getUsername(), uriInfo, clientConnection);
         LoginProtocol protocol = session.getProvider(LoginProtocol.class, clientSession.getAuthMethod());
         protocol.setRealm(realm)
+                .setHttpHeaders(request.getHttpHeaders())
                 .setUriInfo(uriInfo);
         return protocol.authenticated(userSession, new ClientSessionCode(realm, clientSession));
 
@@ -361,17 +376,28 @@ public class AuthenticationManager {
 
         Set<UserModel.RequiredAction> requiredActions = user.getRequiredActions();
         if (!requiredActions.isEmpty()) {
-            UserModel.RequiredAction action = user.getRequiredActions().iterator().next();
-            accessCode.setRequiredAction(action);
-
-            LoginFormsProvider loginFormsProvider = Flows.forms(session, realm, client, uriInfo).setClientSessionCode(accessCode.getCode()).setUser(user);
-            if (action.equals(UserModel.RequiredAction.VERIFY_EMAIL)) {
-                event.clone().event(EventType.SEND_VERIFY_EMAIL).detail(Details.EMAIL, user.getEmail()).success();
-                LoginActionsService.createActionCookie(realm, uriInfo, clientConnection, userSession.getId());
+            Iterator<RequiredAction> i = user.getRequiredActions().iterator();
+            UserModel.RequiredAction action = i.next();
+            
+            if (action.equals(UserModel.RequiredAction.VERIFY_EMAIL) && Validation.isEmpty(user.getEmail())) {
+                if (i.hasNext())
+                    action = i.next();
+                else
+                    action = null;
             }
 
-            return loginFormsProvider
-                    .createResponse(action);
+            if (action != null) {
+                accessCode.setRequiredAction(action);
+
+                LoginFormsProvider loginFormsProvider = Flows.forms(session, realm, client, uriInfo, request.getHttpHeaders()).setClientSessionCode(accessCode.getCode())
+                        .setUser(user);
+                if (action.equals(UserModel.RequiredAction.VERIFY_EMAIL)) {
+                    event.clone().event(EventType.SEND_VERIFY_EMAIL).detail(Details.EMAIL, user.getEmail()).success();
+                    LoginActionsService.createActionCookie(realm, uriInfo, clientConnection, userSession.getId());
+                }
+
+                return loginFormsProvider.createResponse(action);
+            }
         }
 
         if (!isResource) {
@@ -387,7 +413,7 @@ public class AuthenticationManager {
                 }
             }
 
-            return Flows.forms(session, realm, client, uriInfo)
+            return Flows.forms(session, realm, client, uriInfo, request.getHttpHeaders())
                     .setClientSessionCode(accessCode.getCode())
                     .setAccessRequest(realmRoles, resourceRoles)
                     .setClient(client)
@@ -415,7 +441,7 @@ public class AuthenticationManager {
         }
     }
 
-    protected AuthResult verifyIdentityToken(KeycloakSession session, RealmModel realm, UriInfo uriInfo, ClientConnection connection, boolean checkActive, String tokenString) {
+    protected AuthResult verifyIdentityToken(KeycloakSession session, RealmModel realm, UriInfo uriInfo, ClientConnection connection, boolean checkActive, String tokenString, HttpHeaders headers) {
         try {
             AccessToken token = RSATokenVerifier.verifyToken(tokenString, realm.getPublicKey(), realm.getName(), checkActive);
             if (checkActive) {
@@ -435,7 +461,7 @@ public class AuthenticationManager {
 
             UserSessionModel userSession = session.sessions().getUserSession(realm, token.getSessionState());
             if (!isSessionValid(realm, userSession)) {
-                if (userSession != null) logout(session, realm, userSession, uriInfo, connection);
+                if (userSession != null) logout(session, realm, userSession, uriInfo, connection, headers);
                 logger.debug("User session not active");
                 return null;
             }

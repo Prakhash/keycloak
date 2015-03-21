@@ -1,6 +1,7 @@
 package org.keycloak.services.resources.admin;
 
 import org.jboss.resteasy.annotations.cache.NoCache;
+import org.jboss.resteasy.client.core.executors.ApacheHttpClient4Executor;
 import org.jboss.resteasy.plugins.providers.multipart.InputPart;
 import org.jboss.resteasy.plugins.providers.multipart.MultipartFormDataInput;
 import org.jboss.resteasy.spi.NotFoundException;
@@ -17,6 +18,7 @@ import org.keycloak.models.utils.ModelToRepresentation;
 import org.keycloak.models.utils.RepresentationToModel;
 import org.keycloak.provider.ProviderFactory;
 import org.keycloak.representations.idm.IdentityProviderRepresentation;
+import org.keycloak.services.managers.ResourceAdminManager;
 import org.keycloak.services.resources.flows.Flows;
 import org.keycloak.social.SocialIdentityProvider;
 
@@ -54,21 +56,6 @@ public class IdentityProvidersResource {
         this.auth.init(RealmAuth.Resource.IDENTITY_PROVIDER);
     }
 
-    @GET
-    @NoCache
-    @Produces("application/json")
-    public List<IdentityProviderRepresentation> getIdentityProviders() {
-        this.auth.requireView();
-
-        List<IdentityProviderRepresentation> representations = new ArrayList<IdentityProviderRepresentation>();
-
-        for (IdentityProviderModel identityProviderModel : realm.getIdentityProviders()) {
-            representations.add(ModelToRepresentation.toRepresentation(identityProviderModel));
-        }
-
-        return representations;
-    }
-
     @Path("/providers/{provider_id}")
     @GET
     @NoCache
@@ -85,6 +72,59 @@ public class IdentityProvidersResource {
     }
 
     @POST
+    @Path("import-config")
+    @Consumes(MediaType.MULTIPART_FORM_DATA)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Map<String, String> importFrom(@Context UriInfo uriInfo, MultipartFormDataInput input) throws IOException {
+        this.auth.requireManage();
+        Map<String, List<InputPart>> formDataMap = input.getFormDataMap();
+        String providerId = formDataMap.get("providerId").get(0).getBodyAsString();
+        InputPart file = formDataMap.get("file").get(0);
+        InputStream inputStream = file.getBody(InputStream.class, null);
+        IdentityProviderFactory providerFactory = getProviderFactorytById(providerId);
+        Map<String, String> config = providerFactory.parseConfig(inputStream);
+        return config;
+    }
+
+    @POST
+    @Path("import-config")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Map<String, String> importFrom(@Context UriInfo uriInfo, Map<String, Object> data) throws IOException {
+        this.auth.requireManage();
+
+        String providerId = data.get("providerId").toString();
+        String from = data.get("fromUrl").toString();
+        ApacheHttpClient4Executor executor = ResourceAdminManager.createExecutor();
+        InputStream inputStream = null;
+        try {
+            inputStream = executor.createRequest(from).getTarget(InputStream.class);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        IdentityProviderFactory providerFactory = getProviderFactorytById(providerId);
+        Map<String, String> config = providerFactory.parseConfig(inputStream);
+        return config;
+    }
+
+    @GET
+    @Path("instances")
+    @NoCache
+    @Produces("application/json")
+    public List<IdentityProviderRepresentation> getIdentityProviders() {
+        this.auth.requireView();
+
+        List<IdentityProviderRepresentation> representations = new ArrayList<IdentityProviderRepresentation>();
+
+        for (IdentityProviderModel identityProviderModel : realm.getIdentityProviders()) {
+            representations.add(ModelToRepresentation.toRepresentation(identityProviderModel));
+        }
+
+        return representations;
+    }
+
+    @POST
+    @Path("instances")
     @Consumes(MediaType.APPLICATION_JSON)
     public Response create(@Context UriInfo uriInfo, IdentityProviderRepresentation representation) {
         this.auth.requireManage();
@@ -92,66 +132,29 @@ public class IdentityProvidersResource {
         try {
             this.realm.addIdentityProvider(RepresentationToModel.toModel(representation));
 
-            updateClientIdentityProviders(this.realm.getApplications(), representation);
-            updateClientIdentityProviders(this.realm.getOAuthClients(), representation);
-
             return Response.created(uriInfo.getAbsolutePathBuilder().path(representation.getProviderId()).build()).build();
         } catch (ModelDuplicateException e) {
-            return Flows.errors().exists("Identity Provider " + representation.getId() + " already exists");
+            return Flows.errors().exists("Identity Provider " + representation.getAlias() + " already exists");
         }
     }
 
-    @POST
-    @Consumes(MediaType.MULTIPART_FORM_DATA)
-    public Response createWithFile(@Context UriInfo uriInfo, MultipartFormDataInput input) throws IOException {
-        this.auth.requireManage();
-        Map<String, List<InputPart>> formDataMap = input.getFormDataMap();
-
-        String id = formDataMap.get("id").get(0).getBodyAsString();
-        String name = formDataMap.get("name").get(0).getBodyAsString();
-        String providerId = formDataMap.get("providerId").get(0).getBodyAsString();
-        String enabled = formDataMap.get("enabled").get(0).getBodyAsString();
-        String updateProfileFirstLogin = formDataMap.get("updateProfileFirstLogin").get(0).getBodyAsString();
-        String storeToken = "false";
-
-        if (formDataMap.containsKey("storeToken")) {
-            storeToken = formDataMap.get("storeToken").get(0).getBodyAsString();
-        }
-
-        InputPart file = formDataMap.get("file").get(0);
-        InputStream inputStream = file.getBody(InputStream.class, null);
-        IdentityProviderFactory providerFactory = getProviderFactorytById(providerId);
-        Map config = providerFactory.parseConfig(inputStream);
-        IdentityProviderRepresentation representation = new IdentityProviderRepresentation();
-
-        representation.setId(id);
-        representation.setName(name);
-        representation.setProviderId(providerId);
-        representation.setEnabled(Boolean.valueOf(enabled));
-        representation.setUpdateProfileFirstLogin(Boolean.valueOf(updateProfileFirstLogin));
-        representation.setStoreToken(Boolean.valueOf(storeToken));
-        representation.setConfig(config);
-
-        return create(uriInfo, representation);
-    }
-
-    @Path("{id}")
-    public IdentityProviderResource getIdentityProvider(@PathParam("id") String providerId) {
+    @Path("instances/{alias}")
+    public IdentityProviderResource getIdentityProvider(@PathParam("alias") String alias) {
         this.auth.requireView();
         IdentityProviderModel identityProviderModel = null;
 
         for (IdentityProviderModel storedIdentityProvider : this.realm.getIdentityProviders()) {
-            if (storedIdentityProvider.getId().equals(providerId)
-                    || storedIdentityProvider.getInternalId().equals(providerId)) {
+            if (storedIdentityProvider.getAlias().equals(alias)
+                    || storedIdentityProvider.getInternalId().equals(alias)) {
                 identityProviderModel = storedIdentityProvider;
             }
         }
 
         if (identityProviderModel == null) {
-            throw new NotFoundException("Could not find identity provider: " + providerId);
+            throw new NotFoundException("Could not find identity provider: " + alias);
         }
 
-        IdentityProviderResource identityProviderResource = new IdentityProviderResource(realm, session, identityProviderModel);
+        IdentityProviderResource identityProviderResource = new IdentityProviderResource(this.auth, realm, session, identityProviderModel);
         ResteasyProviderFactory.getInstance().injectProperties(identityProviderResource);
 
         return identityProviderResource;
@@ -176,18 +179,5 @@ public class IdentityProvidersResource {
         allProviders.addAll(this.session.getKeycloakSessionFactory().getProviderFactories(SocialIdentityProvider.class));
 
         return allProviders;
-    }
-
-    private void updateClientIdentityProviders(List<? extends ClientModel> clients, IdentityProviderRepresentation identityProvider) {
-        for (ClientModel clientModel : clients) {
-            List<ClientIdentityProviderMappingModel> allowedIdentityProviders = clientModel.getIdentityProviders();
-            ClientIdentityProviderMappingModel providerMappingModel = new ClientIdentityProviderMappingModel();
-
-            providerMappingModel.setIdentityProvider(identityProvider.getId());
-
-            allowedIdentityProviders.add(providerMappingModel);
-
-            clientModel.updateAllowedIdentityProviders(allowedIdentityProviders);
-        }
     }
 }

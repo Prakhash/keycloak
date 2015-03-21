@@ -46,6 +46,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.keycloak.connections.file.InMemoryModel;
 import org.keycloak.models.ModelDuplicateException;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.entities.ApplicationEntity;
@@ -53,7 +54,6 @@ import org.keycloak.models.entities.ClientEntity;
 import org.keycloak.models.entities.OAuthClientEntity;
 import org.keycloak.models.entities.RealmEntity;
 import org.keycloak.models.entities.RoleEntity;
-import org.keycloak.models.file.InMemoryModel;
 
 /**
  * RealmModel for JSON persistence.
@@ -769,8 +769,16 @@ public class RealmAdapter implements RealmModel {
 
     @Override
     public void addRequiredCredential(String type) {
+        if (type == null) throw new NullPointerException("Credential type can not be null");
+
         RequiredCredentialModel credentialModel = initRequiredCredentialModel(type);
-        addRequiredCredential(credentialModel, realm.getRequiredCredentials());
+
+        List<RequiredCredentialEntity> requiredCredList = realm.getRequiredCredentials();
+        for (RequiredCredentialEntity cred : requiredCredList) {
+            if (type.equals(cred.getType())) return;
+        }
+
+        addRequiredCredential(credentialModel, requiredCredList);
     }
 
     protected void addRequiredCredential(RequiredCredentialModel credentialModel, List<RequiredCredentialEntity> persistentCollection) {
@@ -863,9 +871,9 @@ public class RealmAdapter implements RealmModel {
     }
 
     @Override
-    public IdentityProviderModel getIdentityProviderById(String identityProviderId) {
+    public IdentityProviderModel getIdentityProviderByAlias(String alias) {
         for (IdentityProviderModel identityProviderModel : getIdentityProviders()) {
-            if (identityProviderModel.getId().equals(identityProviderId)) {
+            if (identityProviderModel.getAlias().equals(alias)) {
                 return identityProviderModel;
             }
         }
@@ -875,15 +883,15 @@ public class RealmAdapter implements RealmModel {
 
     @Override
     public void addIdentityProvider(IdentityProviderModel identityProvider) {
-        if (identityProvider.getId() == null) throw new NullPointerException("identityProvider.getId() == null");
+        if (identityProvider.getAlias() == null) throw new NullPointerException("identityProvider.getAlias() == null");
         if (identityProvider.getInternalId() == null) identityProvider.setInternalId(KeycloakModelUtils.generateId());
         allIdProviders.put(identityProvider.getInternalId(), identityProvider);
     }
 
     @Override
-    public void removeIdentityProviderById(String providerId) {
+    public void removeIdentityProviderByAlias(String alias) {
         for (IdentityProviderModel provider : getIdentityProviders()) {
-            if (provider.getId().equals(providerId)) {
+            if (provider.getAlias().equals(alias)) {
                 allIdProviders.remove(provider.getInternalId());
                 break;
             }
@@ -892,7 +900,7 @@ public class RealmAdapter implements RealmModel {
 
     @Override
     public void updateIdentityProvider(IdentityProviderModel identityProvider) {
-        removeIdentityProviderById(identityProvider.getId());
+        removeIdentityProviderByAlias(identityProvider.getAlias());
         addIdentityProvider(identityProvider);
     }
 
@@ -1065,6 +1073,36 @@ public class RealmAdapter implements RealmModel {
     @Override
     public void setAccessCodeLifespanLogin(int accessCodeLifespanLogin) {
         realm.setAccessCodeLifespanLogin(accessCodeLifespanLogin);
+    }
+
+    @Override
+    public boolean isInternationalizationEnabled() {
+        return realm.isInternationalizationEnabled();
+    }
+
+    @Override
+    public void setInternationalizationEnabled(boolean enabled) {
+        realm.setInternationalizationEnabled(enabled);
+    }
+
+    @Override
+    public Set<String> getSupportedLocales() {
+        return new HashSet<>(realm.getSupportedLocales());
+    }
+
+    @Override
+    public void setSupportedLocales(Set<String> locales) {
+        realm.setSupportedLocales(new ArrayList<>(locales));
+    }
+
+    @Override
+    public String getDefaultLocale() {
+        return realm.getDefaultLocale();
+    }
+
+    @Override
+    public void setDefaultLocale(String locale) {
+        realm.setDefaultLocale(locale);
     }
 
     @Override

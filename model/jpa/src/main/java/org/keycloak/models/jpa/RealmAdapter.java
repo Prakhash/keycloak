@@ -1000,8 +1000,8 @@ public class RealmAdapter implements RealmModel {
         if (!role.getContainer().equals(this)) return false;
         session.users().preRemove(this, role);
         RoleEntity roleEntity = RoleAdapter.toRoleEntity(role, em);
-        realm.getRoles().remove(role);
-        realm.getDefaultRoles().remove(role);
+        realm.getRoles().remove(roleEntity);
+        realm.getDefaultRoles().remove(roleEntity);
 
         em.createNativeQuery("delete from COMPOSITE_ROLE where CHILD_ROLE = :role").setParameter("role", roleEntity).executeUpdate();
         em.createNamedQuery("deleteScopeMappingByRole").setParameter("role", roleEntity).executeUpdate();
@@ -1160,9 +1160,8 @@ public class RealmAdapter implements RealmModel {
             IdentityProviderModel identityProviderModel = new IdentityProviderModel();
 
             identityProviderModel.setProviderId(entity.getProviderId());
-            identityProviderModel.setId(entity.getId());
+            identityProviderModel.setAlias(entity.getAlias());
             identityProviderModel.setInternalId(entity.getInternalId());
-            identityProviderModel.setName(entity.getName());
             identityProviderModel.setConfig(entity.getConfig());
             identityProviderModel.setEnabled(entity.isEnabled());
             identityProviderModel.setUpdateProfileFirstLogin(entity.isUpdateProfileFirstLogin());
@@ -1176,9 +1175,9 @@ public class RealmAdapter implements RealmModel {
     }
 
     @Override
-    public IdentityProviderModel getIdentityProviderById(String identityProviderId) {
+    public IdentityProviderModel getIdentityProviderByAlias(String alias) {
         for (IdentityProviderModel identityProviderModel : getIdentityProviders()) {
-            if (identityProviderModel.getId().equals(identityProviderId)) {
+            if (identityProviderModel.getAlias().equals(alias)) {
                 return identityProviderModel;
             }
         }
@@ -1191,9 +1190,8 @@ public class RealmAdapter implements RealmModel {
         IdentityProviderEntity entity = new IdentityProviderEntity();
 
         entity.setInternalId(KeycloakModelUtils.generateId());
-        entity.setId(identityProvider.getId());
+        entity.setAlias(identityProvider.getAlias());
         entity.setProviderId(identityProvider.getProviderId());
-        entity.setName(identityProvider.getName());
         entity.setEnabled(identityProvider.isEnabled());
         entity.setStoreToken(identityProvider.isStoreToken());
         entity.setUpdateProfileFirstLogin(identityProvider.isUpdateProfileFirstLogin());
@@ -1207,9 +1205,9 @@ public class RealmAdapter implements RealmModel {
     }
 
     @Override
-    public void removeIdentityProviderById(String providerId) {
+    public void removeIdentityProviderByAlias(String alias) {
         for (IdentityProviderEntity entity : realm.getIdentityProviders()) {
-            if (entity.getId().equals(providerId)) {
+            if (entity.getAlias().equals(alias)) {
                 em.remove(entity);
                 em.flush();
             }
@@ -1220,8 +1218,7 @@ public class RealmAdapter implements RealmModel {
     public void updateIdentityProvider(IdentityProviderModel identityProvider) {
         for (IdentityProviderEntity entity : this.realm.getIdentityProviders()) {
             if (entity.getInternalId().equals(identityProvider.getInternalId())) {
-                entity.setId(identityProvider.getId());
-                entity.setName(identityProvider.getName());
+                entity.setAlias(identityProvider.getAlias());
                 entity.setEnabled(identityProvider.isEnabled());
                 entity.setUpdateProfileFirstLogin(identityProvider.isUpdateProfileFirstLogin());
                 entity.setAuthenticateByDefault(identityProvider.isAuthenticateByDefault());
@@ -1238,4 +1235,36 @@ public class RealmAdapter implements RealmModel {
         return !this.realm.getIdentityProviders().isEmpty();
     }
 
+    @Override
+    public boolean isInternationalizationEnabled() {
+        return realm.isInternationalizationEnabled();
+    }
+
+    @Override
+    public void setInternationalizationEnabled(boolean enabled) {
+        realm.setInternationalizationEnabled(enabled);
+        em.flush();
+    }
+
+    @Override
+    public Set<String> getSupportedLocales() {
+        return realm.getSupportedLocales();
+    }
+
+    @Override
+    public void setSupportedLocales(Set<String> locales) {
+        realm.setSupportedLocales(locales);
+        em.flush();
+    }
+
+    @Override
+    public String getDefaultLocale() {
+        return realm.getDefaultLocale();
+    }
+
+    @Override
+    public void setDefaultLocale(String locale) {
+        realm.setDefaultLocale(locale);
+        em.flush();
+    }
 }

@@ -403,6 +403,18 @@ module.controller('RealmLoginSettingsCtrl', function($scope, Current, Realm, rea
 
 module.controller('RealmThemeCtrl', function($scope, Current, Realm, realm, serverInfo, $http, $location, Dialog, Notifications) {
     genericRealmUpdate($scope, Current, Realm, realm, serverInfo, $http, $location, Dialog, Notifications, "/realms/" + realm.realm + "/theme-settings");
+
+    $scope.supportedLocalesOptions = {
+        'multiple' : true,
+        'simple_tags' : true,
+        'tags' : ['en', 'de']
+    };
+
+    $scope.$watch('realm.supportedLocales', function(oldVal, newVal) {
+        if(angular.isUndefined(newVal) || (angular.isArray(newVal) && newVal.length == 0)){
+            $scope.realm.defaultLocale = undefined;
+        }
+    }, true);
 });
 
 module.controller('RealmCacheCtrl', function($scope, Current, Realm, realm, serverInfo, $http, $location, Dialog, Notifications) {
@@ -626,37 +638,79 @@ module.controller('RealmDefaultRolesCtrl', function ($scope, Realm, realm, appli
 
 });
 
-module.controller('RealmIdentityProviderCtrl', function($scope, $filter, $upload, realm, instance, providerFactory, IdentityProvider, serverInfo, $location, Notifications) {
+module.controller('RealmIdentityProviderCtrl', function($scope, $filter, $upload, $http, realm, instance, providerFactory, IdentityProvider, serverInfo, $location, Notifications, Dialog) {
     console.log('RealmIdentityProviderCtrl');
 
     $scope.realm = angular.copy(realm);
 
-    $scope.hidePassword = true;
+    $scope.initSamlProvider = function() {
+        $scope.nameIdFormats = [
+            {
+                format: "urn:oasis:names:tc:SAML:2.0:nameid-format:transient",
+                name: "Transient"
+            },
+            {
+                format: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+                name: "Persistent"
 
-    $scope.getBoolean = function(value) {
-        if (value == 'true') {
-            return true;
-        } else if (value == 'false') {
-            return false;
+            },
+            {
+                format: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+                name: "Email"
+
+            },
+            {
+                format: "urn:oasis:names:tc:SAML:2.0:nameid-format:kerberos",
+                name: "Kerberos"
+
+            },
+            {
+                format: "urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName",
+                name: "X.509 Subject Name"
+
+            },
+            {
+                format: "urn:oasis:names:tc:SAML:1.1:nameid-format:WindowsDomainQualifiedName",
+                name: "Windows Domain Qualified Name"
+
+            },
+            {
+                format: "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified",
+                name: "Unspecified"
+
+            }
+        ];
+        if (instance && instance.alias) {
+
         } else {
-            return value;
+            $scope.identityProvider.config.nameIDPolicyFormat = $scope.nameIdFormats[0].format;
         }
     }
 
-    if (instance && instance.id) {
+    $scope.hidePassword = true;
+
+    if (instance && instance.alias) {
         $scope.identityProvider = angular.copy(instance);
         $scope.newIdentityProvider = false;
     } else {
         $scope.identityProvider = {};
         $scope.identityProvider.config = {};
-        $scope.identityProvider.id = "";
+        $scope.identityProvider.alias = providerFactory.name;
         $scope.identityProvider.providerId = providerFactory.id;
-        $scope.identityProvider.name = providerFactory.name;
         $scope.identityProvider.enabled = true;
         $scope.identityProvider.updateProfileFirstLogin = true;
         $scope.identityProvider.authenticateByDefault = false;
         $scope.newIdentityProvider = true;
     }
+
+    $scope.changed = $scope.newIdentityProvider;
+
+    $scope.$watch('identityProvider', function() {
+        if (!angular.equals($scope.identityProvider, instance)) {
+            $scope.changed = true;
+        }
+    }, true);
+
 
     $scope.serverInfo = serverInfo;
 
@@ -664,8 +718,16 @@ module.controller('RealmIdentityProviderCtrl', function($scope, $filter, $upload
 
     $scope.configuredProviders = angular.copy(realm.identityProviders);
 
+    $scope.$watch(function() {
+        return $location.path();
+    }, function() {
+        $scope.path = $location.path().substring(1).split("/");
+    });
+
+
     $scope.files = [];
     $scope.importFile = false;
+    $scope.importUrl = false;
 
     $scope.onFileSelect = function($files) {
         $scope.importFile = true;
@@ -673,19 +735,34 @@ module.controller('RealmIdentityProviderCtrl', function($scope, $filter, $upload
     };
 
     $scope.clearFileSelect = function() {
+        $scope.importUrl = false;
         $scope.importFile = false;
         $scope.files = null;
+    };
+
+    var setConfig = function(data) {
+        for (var key in data) {
+            $scope.identityProvider.config[key] = data[key];
+        }
     }
 
+
     $scope.uploadFile = function() {
+        if (!$scope.identityProvider.alias) {
+            Notifications.error("You must specify an alias");
+            return;
+        }
+        var input = {
+            providerId: providerFactory.id
+        }
         //$files: an array of files selected, each file has name, size, and type.
         for (var i = 0; i < $scope.files.length; i++) {
             var $file = $scope.files[i];
             $scope.upload = $upload.upload({
-                url: authUrl + '/admin/realms/' + realm.realm + '/identity-provider/',
+                url: authUrl + '/admin/realms/' + realm.realm + '/identity-provider/import',
                 // method: POST or PUT,
                 // headers: {'headerKey': 'headerValue'}, withCredential: true,
-                data: $scope.identityProvider,
+                data: input,
                 file: $file
                 /* set file formData name for 'Content-Desposition' header. Default: 'file' */
                 //fileFormDataName: myFile,
@@ -694,13 +771,41 @@ module.controller('RealmIdentityProviderCtrl', function($scope, $filter, $upload
             }).progress(function(evt) {
                 console.log('percent: ' + parseInt(100.0 * evt.loaded / evt.total));
             }).success(function(data, status, headers) {
-                $location.url("/realms/" + realm.realm + "/identity-provider-settings");
-                Notifications.success("The " + $scope.identityProvider.name + " provider has been created.");
+                setConfig(data);
+                $scope.clearFileSelect();
+                Notifications.success("The IDP metadata has been loaded from file.");
             }).error(function() {
                 Notifications.error("The file can not be uploaded. Please verify the file.");
             });
         }
     };
+
+    $scope.importFrom = function() {
+        if (!$scope.identityProvider.alias) {
+            Notifications.error("You must specify an alias");
+            return;
+        }
+        var input = {
+            fromUrl: $scope.fromUrl,
+            providerId: providerFactory.id
+        }
+        $http.post(authUrl + '/admin/realms/' + realm.realm + '/identity-provider/import-config', input)
+            .success(function(data, status, headers) {
+                setConfig(data);
+                $scope.fromUrl = null;
+                $scope.importUrl = false;
+                Notifications.success("Imported config information from url.");
+            }).error(function() {
+                Notifications.error("Config can not be imported. Please verify the url.");
+            });
+    };
+    $scope.$watch('fromUrl', function(newVal, oldVal){
+        if ($scope.fromUrl && $scope.fromUrl.length > 0) {
+            $scope.importUrl = true;
+        } else{
+            $scope.importUrl = false;
+        }
+    });
 
     $scope.$watch('configuredProviders', function(configuredProviders) {
         if (configuredProviders) {
@@ -724,24 +829,30 @@ module.controller('RealmIdentityProviderCtrl', function($scope, $filter, $upload
     $scope.callbackUrl = $location.absUrl().replace(/\/admin.*/, "/realms/") + realm.realm + "/broker/" ;
 
     $scope.addProvider = function(provider) {
+        console.log('addProvider');
         $location.url("/create/identity-provider/" + realm.realm + "/" + provider.id);
     };
 
     $scope.remove = function() {
-        IdentityProvider.delete({
-            realm: $scope.realm.realm,
-            id: $scope.identityProvider.id
-        }, $scope.identityProvider, function () {
-            $scope.changed = false;
-            $location.url("/realms/" + realm.realm + "/identity-provider-settings");
-            Notifications.success("The " + $scope.identityProvider.name + " provider has been deleted.");
+        Dialog.confirmDelete($scope.identityProvider.alias, 'provider', function() {
+            $scope.identityProvider.$remove({
+                realm : realm.realm,
+                alias : $scope.identityProvider.alias
+            }, function() {
+                $location.url("/realms/" + realm.realm + "/identity-provider-settings");
+                Notifications.success("The application has been deleted.");
+            });
         });
     };
 
     $scope.save = function() {
         if ($scope.newIdentityProvider) {
-            IdentityProvider.create({
-                realm: $scope.realm.realm
+            if (!$scope.identityProvider.alias) {
+                Notifications.error("You must specify an alias");
+                return;
+            }
+            IdentityProvider.save({
+                realm: $scope.realm.realm, alias: ''
             }, $scope.identityProvider, function () {
                 $location.url("/realms/" + realm.realm + "/identity-provider-settings");
                 Notifications.success("The " + $scope.identityProvider.name + " provider has been created.");
@@ -757,6 +868,11 @@ module.controller('RealmIdentityProviderCtrl', function($scope, $filter, $upload
         }
     };
 
+    $scope.cancel = function() {
+        $location.url("/realms/" + realm.realm + "/identity-provider-settings");
+    };
+
+
     $scope.reset = function() {
         $scope.identityProvider = {};
         $scope.configuredProviders = angular.copy($scope.realm.identityProviders);
@@ -766,34 +882,29 @@ module.controller('RealmIdentityProviderCtrl', function($scope, $filter, $upload
         $scope.hidePassword = flag;
     };
 
-    $scope.getBoolean = function(value) {
-        if (value == 'true') {
-            return true;
-        } else if (value == 'false') {
-            return false;
-        } else {
-            return value;
-        }
-    }
+});
 
-    $scope.initSamlProvider = function() {
-        if (instance && instance.id) {
-            $scope.identityProvider.config.validateSignature = $scope.getBoolean($scope.identityProvider.config.validateSignature);
-            $scope.identityProvider.config.forceAuthn = $scope.getBoolean($scope.identityProvider.config.forceAuthn);
-            $scope.identityProvider.config.postBindingAuthnRequest = $scope.getBoolean($scope.identityProvider.config.postBindingAuthnRequest);
-            $scope.identityProvider.config.postBindingResponse = $scope.getBoolean($scope.identityProvider.config.postBindingResponse);
-            $scope.identityProvider.config.wantAuthnRequestsSigned = $scope.getBoolean($scope.identityProvider.config.wantAuthnRequestsSigned);
-        } else {
-            $scope.identityProvider.config.postBindingResponse = true;
-        }
-    }
+module.controller('RealmIdentityProviderExportCtrl', function(realm, identityProvider, $scope, $http, IdentityProviderExport) {
+    $scope.realm = realm;
+    $scope.identityProvider = identityProvider;
+    $scope.download = null;
+    $scope.exported = "";
+    $scope.exportedType = "";
 
-    $scope.initKerberosProvider = function() {
-        if (instance && instance.id) {
-            $scope.identityProvider.config.debug = $scope.getBoolean($scope.identityProvider.config.debug);
-        } else {
-            $scope.identityProvider.config.debug = false;
+    var url = IdentityProviderExport.url({realm: realm.realm, alias: identityProvider.alias}) ;
+    $http.get(url).success(function(data, status, headers, config) {
+        $scope.exportedType = headers('Content-Type');
+        $scope.exported = data;
+    });
+
+    $scope.download = function() {
+        var suffix = "txt";
+        if ($scope.exportedType == 'application/xml') {
+            suffix = 'xml';
+        } else if ($scope.exportedType == 'application/json') {
+            suffix = 'json';
         }
+        saveAs(new Blob([$scope.exported], { type: $scope.exportedType }), 'keycloak.' + suffix);
     }
 });
 
@@ -1155,11 +1266,11 @@ module.controller('RealmEventsCtrl', function($scope, RealmEvents, realm) {
     $scope.realm = realm;
     $scope.page = 0;
     
-    $scope.eventTypes = [{tag:'LOGIN'}, {tag:'REGISTER'}, {tag:'LOGOUT'}, {tag:'CODE_TO_TOKEN'}, {tag:'REFRESH_TOKEN'}, 
+    $scope.eventTypes = [{tag:'LOGIN'}, {tag:'REGISTER'}, {tag:'LOGOUT'}, {tag:'CODE_TO_TOKEN'}, {tag:'REFRESH_TOKEN'},
                          {tag:'LOGIN_ERROR'}, {tag:'REGISTER_ERROR'}, {tag:'LOGOUT_ERROR'}, {tag:'CODE_TO_TOKEN_ERROR'}, {tag:'REFRESH_TOKEN_ERROR'},
                          {tag:'VALIDATE_ACCESS_TOKEN'}, {tag:'VALIDATE_ACCESS_TOKEN_ERROR'}, {tag:'SOCIAL_LINK'}, {tag:'SOCIAL_LINK_ERROR'}, {tag:'REMOVE_FEDERATED_IDENTITY'},
                          {tag:'REMOVE_SOCIAL_LINK_ERROR'}, {tag:'UPDATE_EMAIL'}, {tag:'UPDATE_PROFILE'}, {tag:'UPDATE_PASSWORD'}, {tag:'UPDATE_TOTP'}];
-    
+
     $scope.query = {
         id : realm.realm,
         max : 5,

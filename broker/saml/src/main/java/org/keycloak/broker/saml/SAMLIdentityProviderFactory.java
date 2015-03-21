@@ -19,9 +19,12 @@ package org.keycloak.broker.saml;
 
 import org.keycloak.broker.provider.AbstractIdentityProviderFactory;
 import org.keycloak.models.IdentityProviderModel;
+import org.picketlink.common.constants.JBossSAMLConstants;
+import org.picketlink.common.constants.JBossSAMLURIConstants;
 import org.picketlink.common.exceptions.ParsingException;
 import org.picketlink.common.util.DocumentUtil;
 import org.picketlink.identity.federation.core.parsers.saml.SAMLParser;
+import org.picketlink.identity.federation.saml.v2.metadata.EndpointType;
 import org.picketlink.identity.federation.saml.v2.metadata.EntitiesDescriptorType;
 import org.picketlink.identity.federation.saml.v2.metadata.EntityDescriptorType;
 import org.picketlink.identity.federation.saml.v2.metadata.IDPSSODescriptorType;
@@ -76,11 +79,34 @@ public class SAMLIdentityProviderFactory extends AbstractIdentityProviderFactory
 
                     if (idpDescriptor != null) {
                         SAMLIdentityProviderConfig samlIdentityProviderConfig = new SAMLIdentityProviderConfig();
+                        String singleSignOnServiceUrl = null;
+                        boolean postBinding = false;
+                        for (EndpointType endpoint : idpDescriptor.getSingleSignOnService()) {
+                            if (endpoint.getBinding().toString().equals(JBossSAMLURIConstants.SAML_HTTP_POST_BINDING.get())) {
+                                singleSignOnServiceUrl = endpoint.getLocation().toString();
+                                postBinding = true;
+                                break;
+                            } else if (endpoint.getBinding().toString().equals(JBossSAMLURIConstants.SAML_HTTP_REDIRECT_BINDING.get())){
+                                singleSignOnServiceUrl = endpoint.getLocation().toString();
+                            }
+                        }
+                        String singleLogoutServiceUrl = null;
+                        for (EndpointType endpoint : idpDescriptor.getSingleLogoutService()) {
+                            if (postBinding && endpoint.getBinding().toString().equals(JBossSAMLURIConstants.SAML_HTTP_POST_BINDING.get())) {
+                                singleLogoutServiceUrl = endpoint.getLocation().toString();
+                                break;
+                            } else if (!postBinding && endpoint.getBinding().toString().equals(JBossSAMLURIConstants.SAML_HTTP_REDIRECT_BINDING.get())){
+                                singleLogoutServiceUrl = endpoint.getLocation().toString();
+                                break;
+                            }
 
-                        samlIdentityProviderConfig.setSingleSignOnServiceUrl(idpDescriptor.getSingleSignOnService().get(0).getLocation().toString());
+                        }
+                        samlIdentityProviderConfig.setSingleLogoutServiceUrl(singleLogoutServiceUrl);
+                        samlIdentityProviderConfig.setSingleSignOnServiceUrl(singleSignOnServiceUrl);
                         samlIdentityProviderConfig.setWantAuthnRequestsSigned(idpDescriptor.isWantAuthnRequestsSigned());
                         samlIdentityProviderConfig.setValidateSignature(idpDescriptor.isWantAuthnRequestsSigned());
-                        samlIdentityProviderConfig.setPostBindingResponse(true);
+                        samlIdentityProviderConfig.setPostBindingResponse(postBinding);
+                        samlIdentityProviderConfig.setPostBindingAuthnRequest(postBinding);
 
                         List<KeyDescriptorType> keyDescriptor = idpDescriptor.getKeyDescriptor();
                         String defaultCertificate = null;

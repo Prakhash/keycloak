@@ -4,15 +4,13 @@ import org.jboss.logging.Logger;
 import org.jboss.resteasy.client.ClientRequest;
 import org.jboss.resteasy.client.ClientResponse;
 import org.jboss.resteasy.client.core.executors.ApacheHttpClient4Executor;
+import org.keycloak.events.EventBuilder;
 import org.keycloak.models.ApplicationModel;
-import org.keycloak.models.ClaimMask;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.ClientSessionModel;
 import org.keycloak.models.KeycloakSession;
-import org.keycloak.models.KeycloakSessionFactory;
 import org.keycloak.models.ProtocolMapperModel;
 import org.keycloak.models.RealmModel;
-import org.keycloak.models.RoleModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.UserSessionModel;
 import org.keycloak.protocol.LoginProtocol;
@@ -22,6 +20,7 @@ import org.keycloak.protocol.saml.mappers.SAMLLoginResponseMapper;
 import org.keycloak.protocol.saml.mappers.SAMLRoleListMapper;
 import org.keycloak.services.managers.ClientSessionCode;
 import org.keycloak.services.managers.ResourceAdminManager;
+import org.keycloak.services.messages.Messages;
 import org.keycloak.services.resources.RealmsResource;
 import org.keycloak.services.resources.admin.ClientAttributeCertificateResource;
 import org.keycloak.services.resources.flows.Flows;
@@ -94,6 +93,9 @@ public class SamlProtocol implements LoginProtocol {
 
     protected UriInfo uriInfo;
 
+    protected HttpHeaders headers;
+
+    protected EventBuilder event;
 
 
     @Override
@@ -113,6 +115,19 @@ public class SamlProtocol implements LoginProtocol {
         this.uriInfo = uriInfo;
         return this;
     }
+
+    @Override
+    public SamlProtocol setHttpHeaders(HttpHeaders headers){
+        this.headers = headers;
+        return this;
+    }
+
+    @Override
+    public SamlProtocol setEventBuilder(EventBuilder event) {
+        this.event = event;
+        return this;
+    }
+
 
     @Override
     public Response cancelLogin(ClientSessionModel clientSession) {
@@ -141,7 +156,7 @@ public class SamlProtocol implements LoginProtocol {
               return builder.redirectBinding().response();
           }
         } catch (Exception e) {
-            return Flows.forwardToSecurityFailurePage(session, realm, uriInfo, "Failed to process response");
+            return Flows.forwardToSecurityFailurePage(session, realm, uriInfo, headers, Messages.FAILED_TO_PROCESS_RESPONSE );
         }
     }
 
@@ -257,6 +272,7 @@ public class SamlProtocol implements LoginProtocol {
         builder.requestID(requestID)
                .destination(redirectUri)
                .issuer(responseIssuer)
+               .sessionIndex(clientSession.getId())
                .requestIssuer(clientSession.getClient().getClientId())
                .nameIdentifier(nameIdFormat, nameId)
                .authMethod(JBossSAMLURIConstants.AC_UNSPECIFIED.get());
@@ -295,7 +311,7 @@ public class SamlProtocol implements LoginProtocol {
             samlDocument = builder.buildDocument(samlModel);
         } catch (Exception e) {
             logger.error("failed", e);
-            return Flows.forwardToSecurityFailurePage(session, realm, uriInfo, "Failed to process response");
+            return Flows.forwardToSecurityFailurePage(session, realm, uriInfo,headers, Messages.FAILED_TO_PROCESS_RESPONSE);
         }
 
         SAML2BindingBuilder2 bindingBuilder = new SAML2BindingBuilder2();
@@ -317,7 +333,7 @@ public class SamlProtocol implements LoginProtocol {
                 publicKey = SamlProtocolUtils.getEncryptionValidationKey(client);
             } catch (Exception e) {
                 logger.error("failed", e);
-                return Flows.forwardToSecurityFailurePage(session, realm, uriInfo, "Failed to process response");
+                return Flows.forwardToSecurityFailurePage(session, realm, uriInfo, headers, Messages.FAILED_TO_PROCESS_RESPONSE);
             }
             bindingBuilder.encrypt(publicKey);
         }
@@ -329,7 +345,7 @@ public class SamlProtocol implements LoginProtocol {
             }
         } catch (Exception e) {
             logger.error("failed", e);
-            return Flows.forwardToSecurityFailurePage(session, realm, uriInfo, "Failed to process response");
+            return Flows.forwardToSecurityFailurePage(session, realm, uriInfo, headers, Messages.FAILED_TO_PROCESS_RESPONSE );
         }
     }
 
@@ -343,10 +359,6 @@ public class SamlProtocol implements LoginProtocol {
 
     public static boolean includeAuthnStatement(ClientModel client) {
         return "true".equals(client.getAttribute(SAML_AUTHNSTATEMENT));
-    }
-
-    public static boolean multivaluedRoles(ClientModel client) {
-        return "true".equals(client.getAttribute(SAML_MULTIVALUED_ROLES));
     }
 
     public static SignatureAlgorithm getSignatureAlgorithm(ClientModel client) {
@@ -452,9 +464,13 @@ public class SamlProtocol implements LoginProtocol {
     @Override
     public Response finishLogout(UserSessionModel userSession) {
         logger.debug("finishLogout");
+        String logoutBindingUri = userSession.getNote(SAML_LOGOUT_BINDING_URI);
+        String logoutRelayState = userSession.getNote(SAML_LOGOUT_RELAY_STATE);
         SAML2LogoutResponseBuilder builder = new SAML2LogoutResponseBuilder();
         builder.logoutRequestID(userSession.getNote(SAML_LOGOUT_REQUEST_ID));
-        builder.destination(userSession.getNote(SAML_LOGOUT_ISSUER));
+        builder.destination(logoutBindingUri);
+        builder.issuer(getResponseIssuer(realm));
+        builder.relayState(logoutRelayState);
         String signingAlgorithm = userSession.getNote(SAML_LOGOUT_SIGNATURE_ALGORITHM);
         if (signingAlgorithm != null) {
             SignatureAlgorithm algorithm = SignatureAlgorithm.valueOf(signingAlgorithm);
@@ -465,9 +481,9 @@ public class SamlProtocol implements LoginProtocol {
 
         try {
             if (isLogoutPostBindingForInitiator(userSession)) {
-                return builder.postBinding().response(userSession.getNote(SAML_LOGOUT_BINDING_URI));
+                return builder.postBinding().response(logoutBindingUri);
             } else {
-                return builder.redirectBinding().response(userSession.getNote(SAML_LOGOUT_BINDING_URI));
+                return builder.redirectBinding().response(logoutBindingUri);
             }
         } catch (ConfigurationException e) {
             throw new RuntimeException(e);
@@ -538,6 +554,7 @@ public class SamlProtocol implements LoginProtocol {
     protected SAML2LogoutRequestBuilder createLogoutRequest(ClientSessionModel clientSession, ClientModel client) {
         // build userPrincipal with subject used at login
         SAML2LogoutRequestBuilder logoutBuilder = new SAML2LogoutRequestBuilder()
+                                         .issuer(getResponseIssuer(realm))
                                          .userPrincipal(clientSession.getNote(SAML_NAME_ID), clientSession.getNote(SAML_NAME_ID_FORMAT))
                                          .destination(client.getClientId());
         if (requiresRealmSignature(client)) {

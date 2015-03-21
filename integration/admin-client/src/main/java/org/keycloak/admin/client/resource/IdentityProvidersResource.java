@@ -16,14 +16,16 @@ import java.util.List;
  */
 public interface IdentityProvidersResource {
 
-    @Path("{id}")
+    @Path("instances/{id}")
     IdentityProviderResource get(@PathParam("id") String id);
 
     @GET
+    @Path("instances")
     @Produces(MediaType.APPLICATION_JSON)
     List<IdentityProviderRepresentation> findAll();
 
     @POST
+    @Path("instances")
     @Consumes(MediaType.APPLICATION_JSON)
     void create(IdentityProviderRepresentation identityProvider);
 }

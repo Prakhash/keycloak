@@ -4,6 +4,7 @@ import org.jboss.logging.Logger;
 import org.keycloak.OAuth2Constants;
 import org.keycloak.RSATokenVerifier;
 import org.keycloak.VerificationException;
+import org.keycloak.constants.AdapterConstants;
 import org.keycloak.enums.TokenStore;
 import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.representations.AccessToken;
@@ -16,7 +17,6 @@ import java.io.IOException;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.keycloak.constants.AdapterConstants.K_IDP_HINT;
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -132,10 +132,11 @@ public class OAuthRequestAuthenticator {
         String loginHint = getQueryParamValue("login_hint");
         url = UriUtils.stripQueryParam(url,"login_hint");
 
-        String idpHint = getQueryParamValue(K_IDP_HINT);
-        url = UriUtils.stripQueryParam(url, K_IDP_HINT);
+        String idpHint = getQueryParamValue(AdapterConstants.KC_IDP_HINT);
+        url = UriUtils.stripQueryParam(url, AdapterConstants.KC_IDP_HINT);
 
         KeycloakUriBuilder redirectUriBuilder = deployment.getAuthUrl().clone()
+                .queryParam(OAuth2Constants.RESPONSE_TYPE, OAuth2Constants.CODE)
                 .queryParam(OAuth2Constants.CLIENT_ID, deployment.getResourceName())
                 .queryParam(OAuth2Constants.REDIRECT_URI, url)
                 .queryParam(OAuth2Constants.STATE, state)
@@ -144,7 +145,7 @@ public class OAuthRequestAuthenticator {
             redirectUriBuilder.queryParam("login_hint",loginHint);
         }
         if (idpHint != null && idpHint.length() > 0) {
-            redirectUriBuilder.queryParam(K_IDP_HINT,idpHint);
+            redirectUriBuilder.queryParam(AdapterConstants.KC_IDP_HINT,idpHint);
         }
 
         return redirectUriBuilder.build().toString();

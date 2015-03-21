@@ -39,6 +39,25 @@
                         <span class="kc-feedback-text">${message.summary}</span>
                     </div>
                 </div>
+            <#else>
+                <div id="kc-feedback-placeholder" class="${properties.kcFeedBackPlaceholderClass!}">
+                    <div id="kc-feedback-placeholder-wrapper"></div>
+                </div>
+            </#if>
+
+            <#if realm.internationalizationEnabled>
+                <div id="kc-locale" class="${properties.kcLocaleClass!}">
+                    <div id="kc-locale-wrapper" class="${properties.kcLocaleWrapperClass!}">
+                        <div class="kc-dropdown">
+                            <a href="#">${locale.current}</a>
+                            <ul>
+                                <#list locale.supported as l>
+                                    <li class="kc-dropdown-item"><a href="${l.url}">${l.label}</a></li>
+                                </#list>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
             </#if>
 
             <div id="kc-content" class="${properties.kcContentClass!}">
@@ -63,7 +82,7 @@
 
     <!--
         <p class="powered">
-            <a href="http://www.keycloak.org">${rb.poweredByKeycloak}</a>
+            <a href="http://www.keycloak.org">${msg("poweredByKeycloak")}</a>
         </p>
     </div>
     -->

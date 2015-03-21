@@ -28,6 +28,18 @@
             <div class="navbar-collapse navbar-collapse-1">
                 <div class="container">
                     <ul class="nav navbar-nav navbar-utility">
+                        <#if realm.internationalizationEnabled>
+                            <li>
+                                <div class="kc-dropdown">
+                                    <a href="#">${locale.current}</a>
+                                    <ul>
+                                        <#list locale.supported as l>
+                                            <li class="kc-dropdown-item"><a href="${l.url}">${l.label}</a></li>
+                                        </#list>
+                                    </ul>
+                                </div>
+                            <li>
+                        </#if>
                         <#if referrer?has_content && referrer.url?has_content><li><a href="${referrer.url}" id="referrer">Back to ${referrer.name}</a></li></#if>
                         <li><a href="${url.logoutUrl}">Sign Out</a></li>
                     </ul>

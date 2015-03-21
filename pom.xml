@@ -50,7 +50,7 @@
         <selenium.version>2.35.0</selenium.version>
         <javax.mail.version>1.4.5</javax.mail.version>
         <infinispan.version>6.0.2.Final</infinispan.version>
-        <liquibase.version>3.2.2</liquibase.version>
+        <liquibase.version>3.3.2</liquibase.version>
         <jetty9.version>9.1.0.v20131115</jetty9.version>
         <osgi.version>4.2.0</osgi.version>
         <pax.web.version>3.1.2</pax.web.version>
@@ -611,14 +611,15 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-javadoc-plugin</artifactId>
-                    <version>2.8</version>
+                    <version>2.10.1</version>
                     <configuration>
+                        <dependencyLocationsEnabled>false</dependencyLocationsEnabled>
                         <minmemory>128m</minmemory>
                         <maxmemory>1024m</maxmemory>
                         <quiet>false</quiet>
                         <aggregate>true</aggregate>
                         <excludePackageNames>
-                            com.restfully.*:org.jboss.resteasy.examples.*:se.unlogic.*:org.jboss.resteasy.tests.*
+                            com.restfully.*:org.jboss.resteasy.examples.*:se.unlogic.*:org.jboss.resteasy.tests.*:org.apache.*
                         </excludePackageNames>
                         <archive>
                             <index>true</index>
@@ -778,8 +779,7 @@
                 <plugin>
                     <groupId>org.liquibase</groupId>
                     <artifactId>liquibase-maven-plugin</artifactId>
-                    <!-- set to ${liquibase.version} once Liquibase 3.2.3 is released (https://liquibase.jira.com/browse/CORE-1987) -->
-                    <version>3.1.1</version>
+                    <version>${liquibase.version}</version>
                 </plugin>
                 <plugin>
                     <groupId>org.codehaus.mojo</groupId>

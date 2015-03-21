@@ -19,9 +19,9 @@ package org.keycloak.services.resources;
 
 import org.jboss.logging.Logger;
 import org.jboss.resteasy.spi.HttpRequest;
+import org.jboss.resteasy.spi.ResteasyProviderFactory;
 import org.keycloak.ClientConnection;
 import org.keycloak.broker.provider.AuthenticationRequest;
-import org.keycloak.broker.provider.AuthenticationResponse;
 import org.keycloak.broker.provider.FederatedIdentity;
 import org.keycloak.broker.provider.IdentityBrokerException;
 import org.keycloak.broker.provider.IdentityProvider;
@@ -46,8 +46,10 @@ import org.keycloak.services.managers.AuthenticationManager;
 import org.keycloak.services.managers.AuthenticationManager.AuthResult;
 import org.keycloak.services.managers.ClientSessionCode;
 import org.keycloak.services.managers.EventsManager;
+import org.keycloak.services.messages.Messages;
 import org.keycloak.services.resources.flows.Flows;
 import org.keycloak.services.resources.flows.Urls;
+import org.keycloak.services.validation.Validation;
 import org.keycloak.social.SocialIdentityProvider;
 
 import javax.ws.rs.Consumes;
@@ -57,13 +59,8 @@ import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
 import javax.ws.rs.QueryParam;
-import javax.ws.rs.core.Context;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.MultivaluedMap;
-import javax.ws.rs.core.Response;
+import javax.ws.rs.core.*;
 import javax.ws.rs.core.Response.Status;
-import javax.ws.rs.core.UriBuilder;
-import javax.ws.rs.core.UriInfo;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -80,9 +77,10 @@ import static org.keycloak.models.UserModel.RequiredAction.UPDATE_PROFILE;
  * @author Pedro Igor
  */
 @Path("/broker")
-public class IdentityBrokerService {
+public class IdentityBrokerService implements IdentityProvider.AuthenticationCallback {
 
     private static final Logger LOGGER = Logger.getLogger(IdentityBrokerService.class);
+    public static final String BROKER_PROVIDER_ID = "BROKER_PROVIDER_ID";
 
     private final RealmModel realmModel;
 
@@ -97,6 +95,10 @@ public class IdentityBrokerService {
 
     @Context
     private HttpRequest request;
+
+    @Context
+    private HttpHeaders headers;
+
     private EventBuilder event;
 
     public IdentityBrokerService(RealmModel realmModel) {
@@ -121,11 +123,9 @@ public class IdentityBrokerService {
         }
 
         try {
-            ClientSessionCode clientSessionCode = parseClientSessionCode(code, providerId);
-            IdentityProvider identityProvider = getIdentityProvider(providerId);
-            AuthenticationResponse authenticationResponse = identityProvider.handleRequest(createAuthenticationRequest(providerId, clientSessionCode));
-
-            Response response = authenticationResponse.getResponse();
+            ClientSessionCode clientSessionCode = parseClientSessionCode(code);
+            IdentityProvider identityProvider = getIdentityProvider(session, realmModel, providerId);
+            Response response = identityProvider.handleRequest(createAuthenticationRequest(providerId, clientSessionCode));
 
             if (response != null) {
                 this.event.success();
@@ -135,24 +135,23 @@ public class IdentityBrokerService {
                 return response;
             }
         } catch (IdentityBrokerException e) {
-            return redirectToErrorPage("Could not send authentication request to identity provider [" + providerId + "].", e);
+            return redirectToErrorPage(Messages.COULD_NOT_SEND_AUTHENTICATION_REQUEST, e, providerId);
         } catch (Exception e) {
-            return redirectToErrorPage("Unexpected error when handling authentication request to identity provider [" + providerId + "].", e);
+            return redirectToErrorPage(Messages.UNEXPECTED_ERROR_HANDLING_REQUEST, e, providerId);
         }
 
-        return redirectToErrorPage("Could not proceed with authentication request to identity provider.");
+        return redirectToErrorPage(Messages.COULD_NOT_PROCEED_WITH_AUTHENTICATION_REQUEST);
     }
 
-    @GET
-    @Path("{provider_id}")
-    public Response handleResponseGet(@PathParam("provider_id") String providerId) {
-        return handleResponse(providerId);
-    }
+    @Path("{provider_id}/endpoint")
+    public Object getEndpoint(@PathParam("provider_id") String providerId) {
+        IdentityProvider identityProvider = getIdentityProvider(session, realmModel, providerId);
+        Object callback = identityProvider.callback(realmModel, this);
+        ResteasyProviderFactory.getInstance().injectProperties(callback);
+        //resourceContext.initResource(brokerService);
+        return callback;
 
-    @POST
-    @Path("{provider_id}")
-    public Response handleResponsePost(@PathParam("provider_id") String providerId) {
-        return handleResponse(providerId);
+
     }
 
     @Path("{provider_id}/token")
@@ -182,25 +181,20 @@ public class IdentityBrokerService {
                     return badRequest("Invalid client.");
                 }
 
-                if (!clientModel.hasIdentityProvider(providerId)) {
-                    return corsResponse(badRequest("Client [" + audience + "] not authorized."), clientModel);
-                }
-
                 if (!clientModel.isAllowedRetrieveTokenFromIdentityProvider(providerId)) {
                     return corsResponse(badRequest("Client [" + audience + "] not authorized to retrieve tokens from identity provider [" + providerId + "]."), clientModel);
                 }
 
                 if (OAuthClientModel.class.isInstance(clientModel) && !forceRetrieval) {
-                    return corsResponse(Flows.forms(this.session, this.realmModel, clientModel, this.uriInfo)
+                    return corsResponse(Flows.forms(this.session, this.realmModel, clientModel, this.uriInfo, headers)
                             .setClientSessionCode(authManager.extractAuthorizationHeaderToken(this.request.getHttpHeaders()))
                             .setAccessRequest("Your information from " + providerId + " identity provider.")
                             .setClient(clientModel)
-                            .setUriInfo(this.uriInfo)
                             .setActionUri(this.uriInfo.getRequestUri())
                             .createOAuthGrant(null), clientModel);
                 }
 
-                IdentityProvider identityProvider = getIdentityProvider(providerId);
+                IdentityProvider identityProvider = getIdentityProvider(session, realmModel, providerId);
                 IdentityProviderModel identityProviderConfig = getIdentityProviderConfig(providerId);
 
                 if (identityProviderConfig.isStoreToken()) {
@@ -220,9 +214,9 @@ public class IdentityBrokerService {
 
             return badRequest("Invalid token.");
         } catch (IdentityBrokerException e) {
-            return redirectToErrorPage("Could not obtain token fron identity provider [" + providerId + "].", e);
+            return redirectToErrorPage(Messages.COULD_NOT_OBTAIN_TOKEN, e, providerId);
         }  catch (Exception e) {
-            return redirectToErrorPage("Unexpected error when retrieving token from identity provider [" + providerId + "].", e);
+            return redirectToErrorPage(Messages.UNEXPECTED_ERROR_RETRIEVING_TOKEN, e, providerId);
         }
     }
 
@@ -232,93 +226,51 @@ public class IdentityBrokerService {
     public Response consentTokenRetrieval(@PathParam("provider_id") String providerId,
                                           MultivaluedMap<String, String> formData) {
         if (formData.containsKey("cancel")) {
-            return redirectToErrorPage("Permission not approved.");
+            return redirectToErrorPage(Messages.PERMISSION_NOT_APPROVED);
         }
 
         return getToken(providerId, true);
     }
 
-    private Response handleResponse(String providerId) {
-        if (isDebugEnabled()) {
-            LOGGER.debugf("Handling authentication response from identity provider [%s].", providerId);
-        }
-        this.event.event(EventType.IDENTITY_PROVIDER_RESPONSE);
-        this.event.detail(Details.IDENTITY_PROVIDER, providerId);
-        IdentityProviderModel identityProviderConfig = getIdentityProviderConfig(providerId);
-
+    public Response authenticated(Map<String, String> userNotes, IdentityProviderModel identityProviderConfig, FederatedIdentity federatedIdentity, String code) {
+        ClientSessionCode clientCode = null;
         try {
-            IdentityProvider identityProvider = getIdentityProvider(providerId);
-            String relayState = identityProvider.getRelayState(createAuthenticationRequest(providerId, null));
-
-            if (relayState == null) {
-                return redirectToErrorPage("No relay state in response from identity identity [" + providerId + ".");
-            }
-
-            if (isDebugEnabled()) {
-                LOGGER.debugf("Relay state is valid: [%s].", relayState);
-            }
-
-            ClientSessionCode clientSessionCode = parseClientSessionCode(relayState, providerId);
-            AuthenticationResponse authenticationResponse = identityProvider.handleResponse(createAuthenticationRequest(providerId, clientSessionCode));
-            Response response = authenticationResponse.getResponse();
-
-            if (response != null) {
-                if (isDebugEnabled()) {
-                    LOGGER.debugf("Identity provider [%s] is going to send a response [%s].", identityProvider, response);
-                }
-                return response;
-            }
-
-            FederatedIdentity identity = authenticationResponse.getUser();
-
-            if (isDebugEnabled()) {
-                LOGGER.debugf("Identity provider [%s] returned with identity [%s].", providerId, identity);
-            }
-
-            if (!identityProviderConfig.isStoreToken()) {
-                if (isDebugEnabled()) {
-                    LOGGER.debugf("Token will not be stored for identity provider [%s].", providerId);
-                }
-                identity.setToken(null);
-            }
-
-            identity.setIdentityProviderId(providerId);
-
-            return performLocalAuthentication(identity, clientSessionCode);
-        } catch (IdentityBrokerException e) {
-            rollback();
-            return redirectToErrorPage("Authentication failed. Could not authenticate with identity provider [" + providerId + "].", e);
+            clientCode = parseClientSessionCode(code);
         } catch (Exception e) {
-            rollback();
-            return redirectToErrorPage("Unexpected error when handling response from identity provider [" + providerId + "].", e);
-        } finally {
-            if (this.session.getTransaction().isActive()) {
-                this.session.getTransaction().commit();
-            }
-        }
-    }
+            return redirectToErrorPage(Messages.IDENTITY_PROVIDER_AUTHENTICATION_FAILED, e, identityProviderConfig.getProviderId());
 
-    private Response performLocalAuthentication(FederatedIdentity updatedIdentity, ClientSessionCode clientCode) {
+        }
+        String providerId = identityProviderConfig.getAlias();
+        if (!identityProviderConfig.isStoreToken()) {
+            if (isDebugEnabled()) {
+                LOGGER.debugf("Token will not be stored for identity provider [%s].", providerId);
+            }
+            federatedIdentity.setToken(null);
+        }
+
+        federatedIdentity.setIdentityProviderId(providerId);
         ClientSessionModel clientSession = clientCode.getClientSession();
-        IdentityProviderModel identityProviderConfig = getIdentityProviderConfig(updatedIdentity.getIdentityProviderId());
-        String providerId = identityProviderConfig.getId();
-        FederatedIdentityModel federatedIdentityModel = new FederatedIdentityModel(providerId, updatedIdentity.getId(),
-                updatedIdentity.getUsername(), updatedIdentity.getToken());
+        FederatedIdentityModel federatedIdentityModel = new FederatedIdentityModel(providerId, federatedIdentity.getId(),
+                federatedIdentity.getUsername(), federatedIdentity.getToken());
 
         this.event.event(EventType.IDENTITY_PROVIDER_LOGIN)
                 .detail(Details.REDIRECT_URI, clientSession.getRedirectUri())
-                .detail(Details.IDENTITY_PROVIDER_IDENTITY, updatedIdentity.getUsername());
+                .detail(Details.IDENTITY_PROVIDER_IDENTITY, federatedIdentity.getUsername());
 
         UserModel federatedUser = this.session.users().getUserByFederatedIdentity(federatedIdentityModel, this.realmModel);
 
         // Check if federatedUser is already authenticated (this means linking social into existing federatedUser account)
         if (clientSession.getUserSession() != null) {
+            UserSessionModel userSession = clientSession.getUserSession();
+            for (Map.Entry<String, String> entry : userNotes.entrySet()) {
+                userSession.setNote(entry.getKey(), entry.getValue());
+            }
             return performAccountLinking(clientSession, providerId, federatedIdentityModel, federatedUser);
         }
 
         if (federatedUser == null) {
             try {
-                federatedUser = createUser(updatedIdentity);
+                federatedUser = createUser(federatedIdentity);
 
                 if (identityProviderConfig.isUpdateProfileFirstLogin()) {
                     if (isDebugEnabled()) {
@@ -331,7 +283,7 @@ public class IdentityBrokerService {
             }
         }
 
-        updateFederatedIdentity(updatedIdentity, federatedUser);
+        updateFederatedIdentity(federatedIdentity, federatedUser);
 
         UserSessionModel userSession = this.session.sessions()
                 .createUserSession(this.realmModel, federatedUser, federatedUser.getUsername(), this.clientConnection.getRemoteAddr(), "broker", false);
@@ -340,6 +292,10 @@ public class IdentityBrokerService {
         this.event.session(userSession);
 
         TokenManager.attachClientSession(userSession, clientSession);
+        for (Map.Entry<String, String> entry : userNotes.entrySet()) {
+            userSession.setNote(entry.getKey(), entry.getValue());
+        }
+        userSession.setNote(BROKER_PROVIDER_ID, providerId);
 
         if (isDebugEnabled()) {
             LOGGER.debugf("Performing local authentication for user [%s].", federatedUser);
@@ -353,7 +309,7 @@ public class IdentityBrokerService {
         this.event.event(EventType.IDENTITY_PROVIDER_ACCCOUNT_LINKING);
 
         if (federatedUser != null) {
-            return redirectToErrorPage("The identity returned by the identity provider [" + providerId + "] is already linked to other user.");
+            return redirectToErrorPage(Messages.IDENTITY_PROVIDER_ALREADY_LINKED, providerId);
         }
 
         UserModel authenticatedUser = clientSession.getUserSession().getUser();
@@ -364,12 +320,12 @@ public class IdentityBrokerService {
 
         if (!authenticatedUser.isEnabled()) {
             fireErrorEvent(Errors.USER_DISABLED);
-            return redirectToErrorPage("User is disabled.");
+            return redirectToErrorPage(Messages.ACCOUNT_DISABLED);
         }
 
         if (!authenticatedUser.hasRole(this.realmModel.getApplicationByName(ACCOUNT_MANAGEMENT_APP).getRole(MANAGE_ACCOUNT))) {
             fireErrorEvent(Errors.NOT_ALLOWED);
-            return redirectToErrorPage("Insufficient permissions to link identities.");
+            return redirectToErrorPage(Messages.INSUFFICIENT_PERMISSION);
         }
 
         this.session.users().addFederatedIdentity(this.realmModel, authenticatedUser, federatedIdentityModel);
@@ -391,7 +347,7 @@ public class IdentityBrokerService {
         }
     }
 
-    private ClientSessionCode parseClientSessionCode(String code, String providerId) {
+    private ClientSessionCode parseClientSessionCode(String code) {
         ClientSessionCode clientCode = ClientSessionCode.parse(code, this.session, this.realmModel);
 
         if (clientCode != null && clientCode.isValid(AUTHENTICATE)) {
@@ -400,16 +356,16 @@ public class IdentityBrokerService {
             if (clientSession != null) {
                 ClientModel client = clientSession.getClient();
 
-                if (client != null) {
-                    LOGGER.debugf("Got authorization code from client [%s].", client.getClientId());
-                    this.event.client(client);
+                if (client == null) {
+                    throw new IdentityBrokerException("Invalid client");
                 }
+
+                LOGGER.debugf("Got authorization code from client [%s].", client.getClientId());
+                this.event.client(client);
 
                 if (clientSession.getUserSession() != null) {
                     this.event.session(clientSession.getUserSession());
                 }
-            } else {
-                validateClientPermissions(clientCode, providerId);
             }
 
             if (isDebugEnabled()) {
@@ -438,28 +394,28 @@ public class IdentityBrokerService {
         return Urls.identityProviderAuthnResponse(this.uriInfo.getBaseUri(), providerId, this.realmModel.getName()).toString();
     }
 
-    private Response redirectToErrorPage(String message) {
-        return redirectToErrorPage(message, null);
+    private Response redirectToErrorPage(String message, Object ... parameters) {
+        return redirectToErrorPage(message, null, parameters);
     }
 
-    private Response redirectToErrorPage(String message, Throwable throwable) {
+    private Response redirectToErrorPage(String message, Throwable throwable, Object ... parameters) {
         if (message == null) {
-            message = "Unexpected error when authenticating with identity provider";
+            message = Messages.IDENTITY_PROVIDER_UNEXPECTED_ERROR;
         }
 
         fireErrorEvent(message, throwable);
-        return Flows.forwardToSecurityFailurePage(this.session, this.realmModel, this.uriInfo, message);
+        return Flows.forwardToSecurityFailurePage(this.session, this.realmModel, this.uriInfo, headers, message, parameters);
     }
 
     private Response redirectToLoginPage(Throwable t, ClientSessionCode clientCode) {
         String message = t.getMessage();
 
         if (message == null) {
-            message = "Unexpected error when authenticating with identity provider";
+            message = Messages.IDENTITY_PROVIDER_UNEXPECTED_ERROR;
         }
 
         fireErrorEvent(message);
-        return Flows.forms(this.session, this.realmModel, clientCode.getClientSession().getClient(), this.uriInfo)
+        return Flows.forms(this.session, this.realmModel, clientCode.getClientSession().getClient(), this.uriInfo, headers)
                 .setClientSessionCode(clientCode.getCode())
                 .setError(message)
                 .createLogin();
@@ -470,28 +426,28 @@ public class IdentityBrokerService {
         return Flows.errors().error(message, Status.BAD_REQUEST);
     }
 
-    private IdentityProvider getIdentityProvider(String providerId) {
-        IdentityProviderModel identityProviderModel = this.realmModel.getIdentityProviderById(providerId);
+    public static IdentityProvider getIdentityProvider(KeycloakSession session, RealmModel realm, String alias) {
+        IdentityProviderModel identityProviderModel = realm.getIdentityProviderByAlias(alias);
 
         if (identityProviderModel != null) {
-            IdentityProviderFactory providerFactory = getIdentityProviderFactory(identityProviderModel);
+            IdentityProviderFactory providerFactory = getIdentityProviderFactory(session, identityProviderModel);
 
             if (providerFactory == null) {
-                throw new IdentityBrokerException("Could not find factory for identity provider [" + providerId + "].");
+                throw new IdentityBrokerException("Could not find factory for identity provider [" + alias + "].");
             }
 
             return providerFactory.create(identityProviderModel);
         }
 
-        throw new IdentityBrokerException("Identity Provider [" + providerId + "] not found.");
+        throw new IdentityBrokerException("Identity Provider [" + alias + "] not found.");
     }
 
-    private IdentityProviderFactory getIdentityProviderFactory(IdentityProviderModel model) {
+    private static IdentityProviderFactory getIdentityProviderFactory(KeycloakSession session, IdentityProviderModel model) {
         Map<String, IdentityProviderFactory> availableProviders = new HashMap<String, IdentityProviderFactory>();
         List<ProviderFactory> allProviders = new ArrayList<ProviderFactory>();
 
-        allProviders.addAll(this.session.getKeycloakSessionFactory().getProviderFactories(IdentityProvider.class));
-        allProviders.addAll(this.session.getKeycloakSessionFactory().getProviderFactories(SocialIdentityProvider.class));
+        allProviders.addAll(session.getKeycloakSessionFactory().getProviderFactories(IdentityProvider.class));
+        allProviders.addAll(session.getKeycloakSessionFactory().getProviderFactories(SocialIdentityProvider.class));
 
         for (ProviderFactory providerFactory : allProviders) {
             availableProviders.put(providerFactory.getId(), (IdentityProviderFactory) providerFactory);
@@ -502,25 +458,12 @@ public class IdentityBrokerService {
 
     private IdentityProviderModel getIdentityProviderConfig(String providerId) {
         for (IdentityProviderModel model : this.realmModel.getIdentityProviders()) {
-            if (model.getId().equals(providerId)) {
+            if (model.getAlias().equals(providerId)) {
                 return model;
             }
         }
 
         throw new IdentityBrokerException("Configuration for identity provider [" + providerId + "] not found.");
-    }
-
-    private void validateClientPermissions(ClientSessionCode clientSessionCode, String providerId) {
-        ClientSessionModel clientSession = clientSessionCode.getClientSession();
-        ClientModel clientModel = clientSession.getClient();
-
-        if (clientModel == null) {
-            throw new IdentityBrokerException("Invalid client.");
-        }
-
-        if (!clientModel.hasIdentityProvider(providerId)) {
-            throw new IdentityBrokerException("Client [" + clientModel.getClientId() + "] not authorized to authenticate with identity provider [" + providerId + "].");
-        }
     }
 
     private UserModel createUser(FederatedIdentity updatedIdentity) {
@@ -535,19 +478,14 @@ public class IdentityBrokerService {
 
         if (existingUser != null) {
             fireErrorEvent(Errors.FEDERATED_IDENTITY_EMAIL_EXISTS);
-            throw new IdentityBrokerException("federatedIdentityEmailExists");
+            throw new IdentityBrokerException(Messages.FEDERATED_IDENTITY_EMAIL_EXISTS);
         }
 
         String username = updatedIdentity.getUsername();
-        if (this.realmModel.isRegistrationEmailAsUsername()) {
+        if (this.realmModel.isRegistrationEmailAsUsername() && !Validation.isEmpty(updatedIdentity.getEmail())) {
             username = updatedIdentity.getEmail();
-            if (username == null || username.trim().length() == 0) {
-                fireErrorEvent(Errors.FEDERATED_IDENTITY_REGISTRATION_EMAIL_MISSING);
-                throw new IdentityBrokerException("federatedIdentityRegistrationEmailMissing");
-                // TODO KEYCLOAK-1053 (ask user to enter email address) should be implemented instead of plain exception as better solution for this case
-            }
-            username = username.trim();
-        } else if (username != null) {
+        } 
+        if (username != null) {
             username = username.trim();
         }
 
@@ -555,7 +493,7 @@ public class IdentityBrokerService {
 
         if (existingUser != null) {
             fireErrorEvent(Errors.FEDERATED_IDENTITY_USERNAME_EXISTS);
-            throw new IdentityBrokerException("federatedIdentityUsernameExists");
+            throw new IdentityBrokerException(Messages.FEDERATED_IDENTITY_USERNAME_EXISTS);
         }
 
         if (isDebugEnabled()) {

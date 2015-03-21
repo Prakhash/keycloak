@@ -34,9 +34,7 @@ public class UrlBean {
 
     private final URI actionuri;
     private URI baseURI;
-
     private Theme theme;
-
     private String realm;
 
     public UrlBean(RealmModel realm, Theme theme, URI baseURI, URI actionUri) {

@@ -1,10 +1,6 @@
 package org.keycloak.representations.idm;
 
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -28,6 +24,13 @@ public class RealmRepresentation {
     protected Boolean rememberMe;
     protected Boolean verifyEmail;
     protected Boolean resetPasswordAllowed;
+
+    @Deprecated
+    protected Boolean social;
+    @Deprecated
+    protected Boolean updateProfileOnInitialSocialLogin;
+    @Deprecated
+    protected Map<String, String> socialProviders;
 
     protected Boolean userCacheEnabled;
     protected Boolean realmCacheEnabled;
@@ -68,6 +71,10 @@ public class RealmRepresentation {
     private List<IdentityProviderRepresentation> identityProviders;
     private List<ProtocolMapperRepresentation> protocolMappers;
     private Boolean identityFederationEnabled;
+    protected Boolean internationalizationEnabled;
+    protected Set<String> supportedLocales;
+    protected String defaultLocale;
+
 
     public String getId() {
         return id;
@@ -313,12 +320,36 @@ public class RealmRepresentation {
         this.resetPasswordAllowed = resetPassword;
     }
 
+    public Boolean isSocial() {
+        return social;
+    }
+
+    public void setSocial(Boolean social) {
+        this.social = social;
+    }
+
+    public Boolean isUpdateProfileOnInitialSocialLogin() {
+        return updateProfileOnInitialSocialLogin;
+    }
+
+    public void setUpdateProfileOnInitialSocialLogin(Boolean updateProfileOnInitialSocialLogin) {
+        this.updateProfileOnInitialSocialLogin = updateProfileOnInitialSocialLogin;
+    }
+
     public Map<String, String> getBrowserSecurityHeaders() {
         return browserSecurityHeaders;
     }
 
     public void setBrowserSecurityHeaders(Map<String, String> browserSecurityHeaders) {
         this.browserSecurityHeaders = browserSecurityHeaders;
+    }
+
+    public Map<String, String> getSocialProviders() {
+        return socialProviders;
+    }
+
+    public void setSocialProviders(Map<String, String> socialProviders) {
+        this.socialProviders = socialProviders;
     }
 
     public Map<String, String> getSmtpServer() {
@@ -482,10 +513,6 @@ public class RealmRepresentation {
     }
 
     public List<IdentityProviderRepresentation> getIdentityProviders() {
-        if (this.identityProviders == null) {
-            this.identityProviders = new ArrayList<IdentityProviderRepresentation>();
-        }
-
         return identityProviders;
     }
 
@@ -494,11 +521,12 @@ public class RealmRepresentation {
     }
 
     public void addIdentityProvider(IdentityProviderRepresentation identityProviderRepresentation) {
-        getIdentityProviders().add(identityProviderRepresentation);
+        if (identityProviders == null) identityProviders = new LinkedList<>();
+        identityProviders.add(identityProviderRepresentation);
     }
 
     public boolean isIdentityFederationEnabled() {
-        return !getIdentityProviders().isEmpty();
+        return identityProviders != null && !identityProviders.isEmpty();
     }
 
     public List<ProtocolMapperRepresentation> getProtocolMappers() {
@@ -512,5 +540,32 @@ public class RealmRepresentation {
 
     public void setProtocolMappers(List<ProtocolMapperRepresentation> protocolMappers) {
         this.protocolMappers = protocolMappers;
+    }
+
+    public Boolean isInternationalizationEnabled() {
+        return internationalizationEnabled;
+    }
+
+    public void setInternationalizationEnabled(Boolean internationalizationEnabled) {
+        this.internationalizationEnabled = internationalizationEnabled;
+    }
+
+    public Set<String> getSupportedLocales() {
+        if(supportedLocales == null){
+            supportedLocales = new HashSet<String>();
+        }
+        return supportedLocales;
+    }
+
+    public void setSupportedLocales(Set<String> supportedLocales) {
+        this.supportedLocales = supportedLocales;
+    }
+
+    public String getDefaultLocale() {
+        return defaultLocale;
+    }
+
+    public void setDefaultLocale(String defaultLocale) {
+        this.defaultLocale = defaultLocale;
     }
 }

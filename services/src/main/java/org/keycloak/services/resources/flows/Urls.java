@@ -69,7 +69,7 @@ public class Urls {
 
     public static URI identityProviderAuthnResponse(URI baseUri, String providerId, String realmName) {
         return realmBase(baseUri).path(RealmsResource.class, "getBrokerService")
-                .path(IdentityBrokerService.class, "handleResponseGet")
+                .path(IdentityBrokerService.class, "getEndpoint")
                 .build(realmName, providerId);
     }
 
@@ -188,6 +188,10 @@ public class Urls {
 
     public static URI realmOauthAction(URI baseUri, String realmId) {
         return requiredActionsBase(baseUri).path(LoginActionsService.class, "processConsent").build(realmId);
+    }
+
+    public static String localeCookiePath(URI baseUri, String realmName){
+        return realmBase(baseUri).path(realmName).build().getRawPath();
     }
 
     public static URI themeRoot(URI baseUri) {

@@ -21,6 +21,7 @@ import org.keycloak.protocol.oidc.utils.RedirectUtils;
 import org.keycloak.representations.RefreshToken;
 import org.keycloak.services.ErrorResponseException;
 import org.keycloak.services.managers.AuthenticationManager;
+import org.keycloak.services.messages.Messages;
 import org.keycloak.services.resources.Cors;
 import org.keycloak.services.resources.flows.Flows;
 
@@ -77,23 +78,28 @@ public class LogoutEndpoint {
      */
     @GET
     @NoCache
-    public Response logout(final @QueryParam(OIDCLoginProtocol.REDIRECT_URI_PARAM) String redirectUri) {
-        event.event(EventType.LOGOUT);
+    public Response logout(@QueryParam(OIDCLoginProtocol.REDIRECT_URI_PARAM) String redirectUri) {
         if (redirectUri != null) {
-            event.detail(Details.REDIRECT_URI, redirectUri);
+            String validatedUri = RedirectUtils.verifyRealmRedirectUri(uriInfo, redirectUri, realm);
+            if (validatedUri == null) {
+                event.event(EventType.LOGOUT);
+                event.detail(Details.REDIRECT_URI, redirectUri);
+                event.error(Errors.INVALID_REDIRECT_URI);
+                return Flows.forwardToSecurityFailurePage(session, realm, uriInfo, headers, Messages.INVALID_REDIRECT_URI);
+            }
+            redirectUri = validatedUri;
         }
+
         // authenticate identity cookie, but ignore an access token timeout as we're logging out anyways.
         AuthenticationManager.AuthResult authResult = authManager.authenticateIdentityCookie(session, realm, uriInfo, clientConnection, headers, false);
         if (authResult != null) {
-            logout(authResult.getSession());
+            if (redirectUri != null) authResult.getSession().setNote(OIDCLoginProtocol.LOGOUT_REDIRECT_URI, redirectUri);
+            authResult.getSession().setNote(AuthenticationManager.KEYCLOAK_LOGOUT_PROTOCOL, OIDCLoginProtocol.LOGIN_PROTOCOL);
+            return AuthenticationManager.browserLogout(session, realm, authResult.getSession(), uriInfo, clientConnection, headers);
         }
 
         if (redirectUri != null) {
-            String validatedRedirect = RedirectUtils.verifyRealmRedirectUri(uriInfo, redirectUri, realm);
-            if (validatedRedirect == null) {
-                return Flows.forwardToSecurityFailurePage(session, realm, uriInfo, "Invalid redirect uri.");
-            }
-            return Response.status(302).location(UriBuilder.fromUri(validatedRedirect).build()).build();
+            return Response.status(302).location(UriBuilder.fromUri(redirectUri).build()).build();
         } else {
             return Response.ok().build();
         }
@@ -143,7 +149,7 @@ public class LogoutEndpoint {
     }
 
     private void logout(UserSessionModel userSession) {
-        authManager.logout(session, realm, userSession, uriInfo, clientConnection);
+        authManager.logout(session, realm, userSession, uriInfo, clientConnection, headers);
         event.user(userSession.getUser()).session(userSession).success();
     }
 

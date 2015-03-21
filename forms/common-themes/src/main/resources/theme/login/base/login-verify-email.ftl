@@ -1,15 +1,15 @@
 <#import "template.ftl" as layout>
 <@layout.registrationLayout; section>
     <#if section = "title">
-        ${rb.emailVerifyTitle}
+        ${msg("emailVerifyTitle")}
     <#elseif section = "header">
-        ${rb.emailVerifyTitle}
+        ${msg("emailVerifyTitle")}
     <#elseif section = "form">
         <p class="instruction">
-            ${rb.emailVerifyInstr}
+            ${msg("emailVerifyInstruction1")}
         </p>
-        <p class="instruction">${rb.emailVerifyInstrQ}
-            <a href="${url.loginEmailVerificationUrl}">${rb.emailVerifyClick}</a> ${rb.emailVerifyResend}
+        <p class="instruction">
+            ${msg("emailVerifyInstruction2")} <a href="${url.loginEmailVerificationUrl}">${msg("doClickHere")}</a> ${msg("emailVerifyInstruction3")}
         </p>
     </#if>
 </@layout.registrationLayout>
